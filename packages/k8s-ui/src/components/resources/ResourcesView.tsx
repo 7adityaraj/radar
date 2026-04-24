@@ -1630,6 +1630,8 @@ interface ResourcesViewProps {
   onCreateResource?: (kind: { name: string; kind: string; group: string } | null) => void
   /** User-preferred default sort column and direction. Applied when switching resource kinds instead of resetting to null. */
   defaultSort?: { column: string; direction: 'asc' | 'desc' } | null
+  /** Called when the user manually changes the sort, so callers can persist it as the new default. */
+  onSortChange?: (sort: { column: string; direction: 'asc' | 'desc' } | null) => void
 }
 
 // Default selected kind
@@ -1703,6 +1705,7 @@ export function ResourcesView({
   hideSidebar = false,
   onCreateResource,
   defaultSort = null,
+  onSortChange,
 }: ResourcesViewProps) {
   const location = useMemo(() => ({ search: locationSearch, pathname: locationPathname }), [locationSearch, locationPathname])
   const initialFilters = getInitialFiltersFromURL()
@@ -2573,21 +2576,30 @@ export function ResourcesView({
 
   // Toggle sort for a column
   const handleSort = useCallback((column: string) => {
+    let newColumn: string | null
+    let newDirection: SortDirection
+
     if (sortColumn === column) {
       // Cycle: asc -> desc -> null
       if (sortDirection === 'asc') {
-        setSortDirection('desc')
+        newColumn = column
+        newDirection = 'desc'
       } else if (sortDirection === 'desc') {
-        setSortColumn(null)
-        setSortDirection(null)
+        newColumn = null
+        newDirection = null
       } else {
-        setSortDirection('asc')
+        newColumn = column
+        newDirection = 'asc'
       }
     } else {
-      setSortColumn(column)
-      setSortDirection('asc')
+      newColumn = column
+      newDirection = 'asc'
     }
-  }, [sortColumn, sortDirection])
+
+    setSortColumn(newColumn)
+    setSortDirection(newDirection)
+    onSortChange?.(newColumn && newDirection ? { column: newColumn, direction: newDirection } : null)
+  }, [sortColumn, sortDirection, onSortChange])
 
   // Get sortable value from a resource for a given column
   const getSortValue = useCallback((resource: any, column: string, kind?: string): string | number => {

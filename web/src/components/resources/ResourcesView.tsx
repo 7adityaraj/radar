@@ -118,7 +118,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
   const { pinned, togglePin, isPinned } = usePinnedKinds()
 
   // Default sort preference
-  const { defaultSort } = useDefaultSort()
+  const { defaultSort, setDefaultSort } = useDefaultSort()
 
   // Dock actions
   const openLogs = useOpenLogs()
@@ -189,6 +189,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
       onCreateResource={handleCreateResource}
       // Default sort preference
       defaultSort={defaultSort}
+      onSortChange={setDefaultSort}
     />
     <CreateResourceDialog
       open={createDialogOpen}
