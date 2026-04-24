@@ -1628,6 +1628,8 @@ interface ResourcesViewProps {
   hideSidebar?: boolean
   /** Callback when the [+] create button is clicked. Receives the currently selected kind info. */
   onCreateResource?: (kind: { name: string; kind: string; group: string } | null) => void
+  /** User-preferred default sort column and direction. Applied when switching resource kinds instead of resetting to null. */
+  defaultSort?: { column: string; direction: 'asc' | 'desc' } | null
 }
 
 // Default selected kind
@@ -1700,6 +1702,7 @@ export function ResourcesView({
   onSelectedKindChange,
   hideSidebar = false,
   onCreateResource,
+  defaultSort = null,
 }: ResourcesViewProps) {
   const location = useMemo(() => ({ search: locationSearch, pathname: locationPathname }), [locationSearch, locationPathname])
   const initialFilters = getInitialFiltersFromURL()
@@ -1716,8 +1719,8 @@ export function ResourcesView({
     onSelectedKindChange?.(selectedKind)
   }, [selectedKind.name, selectedKind.group]) // eslint-disable-line react-hooks/exhaustive-deps
   const [searchTerm, setSearchTerm] = useState(initialFilters.search)
-  const [sortColumn, setSortColumn] = useState<string | null>(null)
-  const [sortDirection, setSortDirection] = useState<SortDirection>(null)
+  const [sortColumn, setSortColumn] = useState<string | null>(defaultSort?.column ?? null)
+  const [sortDirection, setSortDirection] = useState<SortDirection>(defaultSort?.direction ?? null)
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
   // Filter state
   const [columnFilters, setColumnFilters] = useState<Record<string, string[]>>(initialFilters.columnFilters)
@@ -2559,14 +2562,14 @@ export function ResourcesView({
       return
     }
     prevKindRef.current = selectedKind.name
-    setSortColumn(null)
-    setSortDirection(null)
+    setSortColumn(defaultSort?.column ?? null)
+    setSortDirection(defaultSort?.direction ?? null)
     setOpenColumnFilter(null)
     if (!isSyncingFromURL.current) {
       setColumnFilters({})
     }
     setProblemFilters([])
-  }, [selectedKind.name])
+  }, [selectedKind.name]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Toggle sort for a column
   const handleSort = useCallback((column: string) => {
