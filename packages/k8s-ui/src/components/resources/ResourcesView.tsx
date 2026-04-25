@@ -2574,6 +2574,17 @@ export function ResourcesView({
     setProblemFilters([])
   }, [selectedKind.name]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Apply defaultSort changes immediately when the user updates the preference in settings
+  const isDefaultSortMounted = useRef(false)
+  useEffect(() => {
+    if (!isDefaultSortMounted.current) {
+      isDefaultSortMounted.current = true
+      return
+    }
+    setSortColumn(defaultSort?.column ?? null)
+    setSortDirection(defaultSort?.direction ?? null)
+  }, [defaultSort])
+
   // Toggle sort for a column
   const handleSort = useCallback((column: string) => {
     let newColumn: string | null

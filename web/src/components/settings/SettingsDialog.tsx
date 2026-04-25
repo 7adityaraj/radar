@@ -254,7 +254,7 @@ function DefaultSortSection({
     <div className="space-y-3">
       <div>
         <label className="block text-sm font-medium text-theme-text-primary mb-1">Default Sort Column</label>
-        <p className="text-xs text-theme-text-tertiary mb-1">Applied when switching between resource types</p>
+        <p className="text-xs text-theme-text-tertiary mb-1">Applies immediately and when switching between resource types</p>
         <select
           value={defaultSort?.column ?? ''}
           onChange={(e) => handleColumnChange(e.target.value)}

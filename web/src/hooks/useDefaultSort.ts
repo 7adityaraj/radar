@@ -8,6 +8,10 @@ export interface DefaultSort {
 
 const STORAGE_KEY = 'radar-default-sort'
 
+// Module-level subscribers so all hook instances stay in sync within the same tab
+type Listener = (sort: DefaultSort | null) => void
+const listeners = new Set<Listener>()
+
 function loadDefaultSort(): DefaultSort | null {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
@@ -44,6 +48,12 @@ function saveDefaultSort(sort: DefaultSort | null) {
 export function useDefaultSort() {
   const [defaultSort, setDefaultSortState] = useState<DefaultSort | null>(loadDefaultSort)
 
+  // Register this instance so other callers can push updates to it
+  useEffect(() => {
+    listeners.add(setDefaultSortState)
+    return () => { listeners.delete(setDefaultSortState) }
+  }, [])
+
   // Sync from server (persisted settings survive port changes in desktop app)
   useEffect(() => {
     fetch(apiUrl('/settings'), { credentials: getCredentialsMode(), headers: getAuthHeaders() })
@@ -58,8 +68,8 @@ export function useDefaultSort() {
   }, [])
 
   const setDefaultSort = useCallback((sort: DefaultSort | null) => {
-    setDefaultSortState(sort)
     saveDefaultSort(sort)
+    listeners.forEach(l => l(sort))
   }, [])
 
   return { defaultSort, setDefaultSort }
