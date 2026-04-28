@@ -1,11 +1,12 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import { X, Package, ChevronRight, ChevronLeft, Play, Loader2, AlertTriangle, CheckCircle, User, BookOpen, Link as LinkIcon, Star, BadgeCheck, Shield, Globe, Building2, Plus, Minus, Terminal } from 'lucide-react'
+import { PaneLoader } from '@skyhook-io/k8s-ui'
 import { clsx } from 'clsx'
 import yaml from 'yaml'
 import { createPatch } from 'diff'
 import { useQueryClient } from '@tanstack/react-query'
 import { useChartDetail, useNamespaces, useArtifactHubChart, installChartWithProgress, type InstallProgressEvent } from '../../api/client'
-import { useCanHelmWrite } from '../../contexts/CapabilitiesContext'
+import { useCanHelmAct } from '../../api/client'
 import type { ChartSource, ChartDetail, ArtifactHubChartDetail } from '../../types'
 import { YamlEditor } from '../ui/YamlEditor'
 import { Tooltip } from '../ui/Tooltip'
@@ -64,7 +65,7 @@ export function InstallWizard({ repo, chartName, version, source, repoUrl, defau
   const progressEndRef = useRef<HTMLDivElement>(null)
 
   const queryClient = useQueryClient()
-  const canHelmWrite = useCanHelmWrite()
+  const { allowed: canHelmWrite, reason: helmActReason } = useCanHelmAct()
 
   // Choose the right data based on source
   const isLocal = source === 'local'
@@ -277,10 +278,7 @@ export function InstallWizard({ repo, chartName, version, source, repoUrl, defau
         {/* Content */}
         <div className="flex-1 overflow-auto p-4">
           {chartLoading ? (
-            <div className="flex items-center justify-center h-32 text-theme-text-tertiary">
-              <Loader2 className="w-5 h-5 animate-spin mr-2" />
-              Loading chart details...
-            </div>
+            <PaneLoader label="Loading chart details…" className="h-32" />
           ) : (
             <>
               {step === 'info' && (
@@ -389,7 +387,7 @@ export function InstallWizard({ repo, chartName, version, source, repoUrl, defau
                     onClick={handleInstall}
                     disabled={!canInstall || isInstalling || !canHelmWrite}
                     className="flex items-center gap-2 px-4 py-2 text-sm font-medium btn-brand rounded-lg disabled:cursor-not-allowed"
-                    title={!canHelmWrite ? 'Helm write permissions required (rbac.helm=true)' : undefined}
+                    title={!canHelmWrite ? helmActReason : undefined}
                   >
                     {isInstalling ? (
                       <Loader2 className="w-4 h-4 animate-spin" />

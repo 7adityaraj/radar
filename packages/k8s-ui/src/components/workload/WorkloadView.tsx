@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect, useRef, useCallback, type ReactNode } from 'react'
 import { flushSync } from 'react-dom'
 import { useRefreshAnimation } from '../../hooks/useRefreshAnimation'
+import { PaneLoader } from '../ui/PaneLoader'
 import { useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
 import { clsx } from 'clsx'
 import {
@@ -84,6 +85,11 @@ interface WorkloadViewProps {
   eventsLoading?: boolean
   /** Topology data for hierarchy building */
   topology?: any
+  resourceFocusedK8sEvents?: TimelineEvent[]
+  resourceFocusedUpdates?: TimelineEvent[]
+  resourceFocusedEventsLoading?: boolean
+  resourceFocusedK8sError?: Error | null
+  resourceFocusedUpdatesError?: Error | null
 
   // ── Capabilities ─────────────────────────────────────────────────────────
   /** Whether secrets can be updated */
@@ -159,6 +165,11 @@ export function WorkloadView({
   allEvents,
   eventsLoading = false,
   topology,
+  resourceFocusedK8sEvents,
+  resourceFocusedUpdates,
+  resourceFocusedEventsLoading = false,
+  resourceFocusedK8sError = null,
+  resourceFocusedUpdatesError = null,
   // Capabilities
   canUpdateSecrets,
   // Mutations
@@ -426,7 +437,7 @@ export function WorkloadView({
         {/* Content — viewTransitionName scopes View Transitions API cross-fade to this element */}
         <div className="flex-1 overflow-y-auto" style={{ viewTransitionName: 'drawer-content' }}>
           {resourceLoading ? (
-            <div className="flex items-center justify-center h-32 text-theme-text-tertiary">Loading...</div>
+            <PaneLoader className="h-32" />
           ) : !resource ? (
             <div className="flex items-center justify-center h-32 text-theme-text-tertiary">Resource not found</div>
           ) : showYaml ? (
@@ -456,6 +467,11 @@ export function WorkloadView({
                 rendererOverrides={rendererOverrides}
                 resolvedEnvFrom={resolvedEnvFrom}
                 renderMetrics={renderMetricsTab}
+                events={resourceFocusedK8sEvents}
+                eventsLoading={resourceFocusedEventsLoading}
+                updates={resourceFocusedUpdates}
+                eventsError={resourceFocusedK8sError}
+                updatesError={resourceFocusedUpdatesError}
               />
               {renderOverviewExtra && (
                 <div className="px-4 pb-4">
@@ -602,6 +618,11 @@ export function WorkloadView({
               onSwitchToTimeline={() => handleSetTab('timeline')}
               rendererOverrides={rendererOverrides}
               resolvedEnvFrom={resolvedEnvFrom}
+              events={resourceFocusedK8sEvents}
+              eventsLoading={resourceFocusedEventsLoading}
+              updates={resourceFocusedUpdates}
+              eventsError={resourceFocusedK8sError}
+              updatesError={resourceFocusedUpdatesError}
               extraContent={renderOverviewExtra && renderOverviewExtra({ kind, namespace, name })}
             />
         )}
@@ -640,7 +661,7 @@ export function WorkloadView({
         {activeTab === 'yaml' && (
           <div className="h-full overflow-auto">
             {resourceLoading ? (
-              <div className="flex items-center justify-center h-32 text-theme-text-tertiary">Loading...</div>
+              <PaneLoader className="h-32" />
             ) : !resource ? (
               <div className="flex items-center justify-center h-32 text-theme-text-tertiary">Resource not found</div>
             ) : (
@@ -1087,6 +1108,11 @@ function InfoTab({
   onSwitchToTimeline,
   rendererOverrides,
   resolvedEnvFrom,
+  events,
+  eventsLoading,
+  updates,
+  eventsError,
+  updatesError,
   extraContent,
 }: {
   resource: any
@@ -1102,15 +1128,15 @@ function InfoTab({
   onSwitchToTimeline?: () => void
   rendererOverrides?: RendererOverrides
   resolvedEnvFrom?: ResolvedEnvFrom
+  events?: TimelineEvent[]
+  eventsLoading?: boolean
+  updates?: TimelineEvent[]
+  eventsError?: Error | null
+  updatesError?: Error | null
   extraContent?: ReactNode
 }) {
   if (isLoading) {
-    return (
-      <div className="flex items-center justify-center h-full text-theme-text-tertiary">
-        <RefreshCw className="w-5 h-5 animate-spin mr-2" />
-        Loading...
-      </div>
-    )
+    return <PaneLoader className="h-full" />
   }
 
   if (!resource) {
@@ -1137,6 +1163,11 @@ function InfoTab({
         onOpenLogs={onOpenLogs}
         rendererOverrides={rendererOverrides}
         resolvedEnvFrom={resolvedEnvFrom}
+        events={events}
+        eventsLoading={eventsLoading}
+        updates={updates}
+        eventsError={eventsError}
+        updatesError={updatesError}
         eventsHint={onSwitchToTimeline && (
           <button
             onClick={onSwitchToTimeline}

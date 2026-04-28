@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useEffect, useCallback, useRef, useContext } from 'react'
 import { TableVirtuoso, type TableVirtuosoHandle } from 'react-virtuoso'
 import { useRefreshAnimation } from '../../hooks/useRefreshAnimation'
+import { PaneLoader } from '../ui/PaneLoader'
 import type { TopPodMetrics, TopNodeMetrics } from '../../types'
 import {
   Search,
@@ -1698,8 +1699,20 @@ function getInitialKindFromURL(
   locationPathname?: string,
   locationSearch?: string,
 ): SelectedKindInfo {
-  const pathname = locationPathname || window.location.pathname
-  const search = locationSearch || window.location.search
+  // Prefer injected pathname/search from the host router. Using `||` would incorrectly fall back to
+  // window when the host passes '' before hydration. SSR has no window.
+  const pathname =
+    locationPathname !== undefined
+      ? locationPathname
+      : typeof window !== 'undefined'
+        ? window.location.pathname
+        : ''
+  const search =
+    locationSearch !== undefined
+      ? locationSearch
+      : typeof window !== 'undefined'
+        ? window.location.search
+        : ''
   const base = basePath.replace(/\/$/, '') // strip trailing slash
   let kind: string | null = null
   if (pathname.startsWith(base + '/')) {
@@ -1754,8 +1767,8 @@ export function ResourcesView({
   pinned = [],
   togglePin = () => {},
   isPinned = () => false,
-  locationSearch = '',
-  locationPathname = '',
+  locationSearch,
+  locationPathname,
   onNavigate,
   basePath = '/resources',
   onOpenLogs,
@@ -1768,7 +1781,6 @@ export function ResourcesView({
   extraLeadingColumns,
   onRowSelect,
 }: ResourcesViewProps) {
-  const location = useMemo(() => ({ search: locationSearch, pathname: locationPathname }), [locationSearch, locationPathname])
   const initialFilters = getInitialFiltersFromURL()
   const [selectedKind, setSelectedKind] = useState<SelectedKindInfo>(() => getInitialKindFromURL(basePath, locationPathname, locationSearch))
   // Sync selectedKind from URL when locationPathname changes (e.g., browser back, external sidebar navigation)
@@ -1777,7 +1789,7 @@ export function ResourcesView({
     if (kindFromURL.name !== selectedKind.name || kindFromURL.group !== selectedKind.group) {
       setSelectedKind(kindFromURL)
     }
-  }, [locationPathname]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [locationPathname, locationSearch]) // eslint-disable-line react-hooks/exhaustive-deps
   // Notify parent of selected kind changes (including initial mount)
   useEffect(() => {
     onSelectedKindChange?.(selectedKind)
@@ -2360,7 +2372,7 @@ export function ResourcesView({
     requestAnimationFrame(() => {
       isSyncingFromURL.current = false
     })
-  }, [location.search, location.pathname]) // Re-run when URL path or search params change
+  }, [locationPathname, locationSearch]) // Re-run when injected URL path or search params change
 
   const navigate = useMemo(() => {
     if (!onNavigate) return (_pathOrObj: any, _opts?: any) => {}
@@ -3573,9 +3585,7 @@ export function ResourcesView({
           }}
         >
           {isLoading ? (
-            <div className="absolute inset-0 flex items-center justify-center text-theme-text-tertiary">
-              Loading...
-            </div>
+            <PaneLoader className="absolute inset-0" />
           ) : isSelectedForbidden ? (
             <div className="absolute inset-0 flex flex-col items-center justify-center text-theme-text-tertiary">
               <Shield className="w-8 h-8 text-amber-400 mb-2" />

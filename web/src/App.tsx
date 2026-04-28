@@ -37,7 +37,7 @@ import { useNamespaces, useSwitchContext, useAuthMe } from './api/client'
 import { routePath, apiUrl, getAuthHeaders, getCredentialsMode } from './api/config'
 import { KeyboardShortcutProvider, useRegisterShortcut, useRegisterShortcuts } from './hooks/useKeyboardShortcuts'
 import { useAnimatedUnmount } from './hooks/useAnimatedUnmount'
-import { Loader2 } from 'lucide-react'
+import radarLoadingIcon from '@skyhook-io/k8s-ui/assets/radar/radar-icon-loading.svg'
 import { RefreshCw, Network, List, Clock, Package, Sun, Moon, Activity, Home, Star, Search, Bug, Settings, SquareTerminal, ShieldCheck } from 'lucide-react'
 import { useTheme } from './context/ThemeContext'
 import { Tooltip } from './components/ui/Tooltip'
@@ -141,8 +141,8 @@ function AuthBarrier({ authMode }: { authMode: string }) {
     return (
       <div className="flex-1 flex items-center justify-center bg-theme-base">
         <div className="flex flex-col items-center gap-4">
-          <Loader2 className="w-8 h-8 animate-spin text-blue-400" />
-          <p className="text-sm text-theme-text-secondary">Redirecting to login...</p>
+          <img src={radarLoadingIcon} alt="" aria-hidden className="w-11 h-11" />
+          <p className="text-sm text-theme-text-secondary">Redirecting to login…</p>
         </div>
       </div>
     )
@@ -216,6 +216,23 @@ function AppInner() {
 
   // Get mainView from URL path
   const mainView = getViewFromPath(location.pathname)
+
+  // Workload slug after `/resources/` (defaults to `pods`). Bare `/resources` redirects to `/resources/pods`.
+  const normalizedResourcesKindSlug = useMemo(() => {
+    const m = location.pathname.match(/^\/resources(?:\/([^/]+))?/)
+    const slug = m?.[1] ?? ''
+    return slug || 'pods'
+  }, [location.pathname])
+
+  // Canonical URL — `/resources` is not stable for bookmarks/sharing; normalize to `/resources/pods`.
+  useEffect(() => {
+    const path = location.pathname.replace(/\/+$/, '') || '/'
+    if (path !== '/resources') return
+    navigate(
+      { pathname: '/resources/pods', search: location.search, hash: location.hash },
+      { replace: true },
+    )
+  }, [location.pathname, location.search, location.hash, navigate])
 
   // Set mainView by navigating to the path
   const setMainView = useCallback((view: ExtendedMainView, params?: Record<string, string>) => {
@@ -291,6 +308,23 @@ function AppInner() {
 
   // Suppress the mainView-change clear effect during controlled expand/collapse transitions.
   const suppressViewClearRef = useRef(false)
+
+  // Close resource drawer when switching workload kind in URL (/resources/pods → /resources/deployments).
+  // Keeps stale Pod drawer from masking the table after sidebar navigation (Radar Hub / app.radarhq.io).
+  const prevResourcesKindSlugRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (mainView !== 'resources') {
+      prevResourcesKindSlugRef.current = null
+      return
+    }
+    const slug = normalizedResourcesKindSlug
+    const prev = prevResourcesKindSlugRef.current
+    prevResourcesKindSlugRef.current = slug
+    if (prev !== null && prev !== slug) {
+      setSelectedResource(null)
+      setDrawerExpanded(false)
+    }
+  }, [mainView, normalizedResourcesKindSlug])
 
   // Animation hooks for smooth mount/unmount transitions
   const resourceDrawer = useAnimatedUnmount(!!selectedResource, 300)
@@ -755,12 +789,7 @@ function AppInner() {
       <header className="relative z-50 flex items-center justify-between px-4 py-2 bg-theme-base/90 backdrop-blur-sm border-b border-theme-border/50">
         {/* Left: Logo + Cluster info */}
         <div className="flex items-center gap-4 shrink-0">
-          {navCustomization.brandSlot ?? (
-            <div className="flex items-center gap-2.5">
-              <Logo />
-              <span className="text-xl text-theme-text-primary leading-none -translate-y-0.5" style={{ fontFamily: "'DM Sans', sans-serif", fontWeight: 520 }}>radar</span>
-            </div>
-          )}
+          {navCustomization.brandSlot ?? <Logo />}
 
           <div className="flex items-center gap-2">
             {navCustomization.contextSlot ?? <ContextSwitcher />}
@@ -787,13 +816,17 @@ function AppInner() {
                   }`}
                 />
               </Tooltip>
-              <span className="text-xs text-theme-text-tertiary hidden xl:inline">
-                {!connected
-                  ? 'Disconnected'
-                  : crdDiscoveryStatus === 'discovering'
-                    ? 'Discovering Custom Resources...'
-                    : 'Connected'}
-              </span>
+              {/* Inline label only for non-steady states where the user
+                  might need to act or wait. The healthy "Connected" case
+                  is the dot alone; the dot's tooltip discloses it. Keeping
+                  "Connected" text here would expand the left section and
+                  collide with the absolute-centered nav block at xl, which
+                  is the same breakpoint where nav labels appear. */}
+              {(!connected || crdDiscoveryStatus === 'discovering') && (
+                <span className="text-xs text-theme-text-tertiary hidden xl:inline">
+                  {!connected ? 'Disconnected' : 'Discovering Custom Resources...'}
+                </span>
+              )}
               {!connected && (
                 <button
                   onClick={reconnect}
@@ -834,7 +867,17 @@ function AppInner() {
                 }`}
               >
                 <Icon className="w-4 h-4" />
-                <span className="hidden lg:inline">{label}</span>
+                {/* Labels appear only when the absolute-centered nav has
+                    enough horizontal room past the left section. Right-side
+                    chrome that adds further pressure (Connected text, star
+                    count) is intentionally pushed to the next tier (xl) so
+                    label rendering and right-side expansion stay decoupled.
+                    Per-button Tooltip discloses labels on hover when the
+                    icon-only viewport is in effect. The 1440 anchor is an
+                    off-system breakpoint chosen by measurement at the time
+                    of this PR — recompute if the cluster switcher cap or
+                    other left-section chrome changes appreciably. */}
+                <span className="hidden min-[1440px]:inline">{label}</span>
               </button>
             </Tooltip>
           ))}
@@ -942,10 +985,12 @@ function AppInner() {
       {!isSwitching && !(authMe?.authEnabled && !authMe?.username) && connection.state === 'connecting' && (
         <div className="flex-1 flex items-center justify-center bg-theme-base">
           <div className="flex flex-col items-center gap-4 text-theme-text-secondary">
-            <Loader2 className="w-8 h-8 animate-spin text-blue-400" />
+            <img src={radarLoadingIcon} alt="" aria-hidden className="w-11 h-11" />
             <div className="text-center">
               <p className="font-medium text-theme-text-primary">Connecting to cluster</p>
-              <p className="text-sm text-theme-text-secondary mt-1">{connection.context || 'Loading...'}</p>
+              {connection.context && (
+                <p className="text-sm text-theme-text-secondary mt-1">{connection.context}</p>
+              )}
               {connection.progressMessage && (
                 <p className="text-xs text-theme-text-tertiary animate-pulse mt-3">
                   {connection.progressMessage}
@@ -960,7 +1005,7 @@ function AppInner() {
       {isSwitching && (
         <div className="flex-1 flex items-center justify-center bg-theme-base">
           <div className="flex flex-col items-center gap-4 text-theme-text-secondary">
-            <Loader2 className="w-8 h-8 animate-spin text-blue-400" />
+            <img src={radarLoadingIcon} alt="" aria-hidden className="w-11 h-11" />
             <div className="text-center">
               <div className="text-sm font-medium text-theme-text-primary">Switching context</div>
               {targetContext && (
@@ -1379,14 +1424,35 @@ function App() {
   )
 }
 
-// Skyhook logo that switches based on theme
+// Header brand: emerald-square radar icon + stacked "Radar" / "by Skyhook"
+// wordmark. Shares its visual shape with the radar-hub-web shell so the
+// standalone OSS app and the embedded Cloud experience read as the same
+// product, and is narrow enough to leave room for the cluster switcher
+// and nav block on standard laptop viewports.
 function Logo() {
-  const { theme } = useTheme()
-  const logoSrc = theme === 'dark'
-    ? '/assets/skyhook/logotype-white-color.svg'
-    : '/assets/skyhook/logotype-dark-color.svg'
-
-  return <img src={logoSrc} alt="Skyhook" className="h-5 w-auto" />
+  return (
+    <div className="flex items-center gap-2.5">
+      <div className="relative w-7 h-7 rounded-lg overflow-hidden flex-shrink-0 bg-emerald-500/10 border border-emerald-500/20">
+        <img
+          src="/images/radar/radar-icon.svg"
+          alt=""
+          aria-hidden
+          className="w-full h-full p-0.5"
+          // Fail loud on a missing/blocked asset rather than rendering an
+          // empty emerald square next to the wordmark — the latter reads
+          // as broken chrome with no diagnostics. Most likely cause is a
+          // build/deploy path mismatch.
+          onError={(e) =>
+            console.error('Radar logo asset failed to load:', (e.currentTarget as HTMLImageElement).src)
+          }
+        />
+      </div>
+      <div className="flex flex-col leading-none">
+        <span className="font-semibold text-[15px] tracking-tight text-theme-text-primary">Radar</span>
+        <span className="text-[9px] mt-0.5 tracking-wide uppercase text-theme-text-tertiary">by Skyhook</span>
+      </div>
+    </div>
+  )
 }
 
 // GitHub star button with live star count + programmatic starring via gh CLI

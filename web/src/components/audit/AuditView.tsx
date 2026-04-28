@@ -1,8 +1,8 @@
 import { useState, useCallback } from 'react'
 import { useAudit, useAuditSettings, useUpdateAuditSettings } from '../../api/client'
 import type { SelectedResource } from '../../types'
-import { AuditFindingsTable } from '@skyhook-io/k8s-ui'
-import { ArrowLeft, ClipboardCheck, Loader2, Settings } from 'lucide-react'
+import { AuditFindingsTable, PaneLoader } from '@skyhook-io/k8s-ui'
+import { ArrowLeft, ClipboardCheck, Settings } from 'lucide-react'
 import { AuditSettingsDialog } from './AuditSettingsDialog'
 
 interface AuditViewProps {
@@ -47,14 +47,7 @@ export function AuditView({ namespaces, onBack, onNavigateToResource }: AuditVie
   }, [auditSettings, updateSettings])
 
   if (isLoading) {
-    return (
-      <div className="flex-1 flex items-center justify-center">
-        <div className="flex flex-col items-center gap-3">
-          <Loader2 className="w-6 h-6 animate-spin text-theme-text-tertiary" />
-          <span className="text-sm text-theme-text-tertiary">Loading audit data...</span>
-        </div>
-      </div>
-    )
+    return <PaneLoader label="Loading audit data…" className="flex-1" />
   }
 
   if (error) {

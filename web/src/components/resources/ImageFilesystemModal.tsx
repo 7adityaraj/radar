@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { X, Folder, File, Link2, ChevronRight, ChevronDown, AlertTriangle, Loader2, Search, Download, HardDrive, Shield, ShieldCheck, Terminal, Copy, Check, RefreshCw } from 'lucide-react'
+import radarLoadingIcon from '@skyhook-io/k8s-ui/assets/radar/radar-icon-loading.svg'
 import { clsx } from 'clsx'
 import { useImageMetadata, ApiError } from '../../api/client'
 import type { FileNode, ImageFilesystem } from '../../types'
@@ -177,13 +178,13 @@ export function ImageFilesystemModal({
         <div className="flex-1 overflow-y-auto p-4">
           {/* Loading state */}
           {isLoading && (
-            <div className="flex flex-col items-center justify-center h-64">
-              <Loader2 className="w-8 h-8 text-blue-400 animate-spin" />
-              <span className="mt-3 text-theme-text-secondary">
-                {isLoadingMetadata ? 'Checking image...' : 'Downloading image layers...'}
+            <div className="flex flex-col items-center justify-center gap-3 h-64">
+              <img src={radarLoadingIcon} alt="" aria-hidden className="w-11 h-11" />
+              <span className="text-sm text-theme-text-secondary">
+                {isLoadingMetadata ? 'Checking image…' : 'Downloading image layers…'}
               </span>
               {isLoadingFilesystem && metadata && (
-                <span className="mt-1 text-xs text-theme-text-tertiary">
+                <span className="text-xs text-theme-text-tertiary">
                   This may take a moment for large images
                 </span>
               )}

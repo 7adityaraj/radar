@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { useOpenCostSummary, useOpenCostWorkloads, useOpenCostNodes } from '../../api/client'
 import type { OpenCostNamespaceCost, OpenCostWorkloadCost, OpenCostNodeCost } from '../../api/client'
 import { ArrowLeft, ChevronDown, ChevronRight, DollarSign, HelpCircle, Loader2, Server, X } from 'lucide-react'
+import { PaneLoader } from '@skyhook-io/k8s-ui'
 import { CostTrendChart } from './CostTrendChart'
 
 interface CostViewProps {
@@ -14,14 +15,7 @@ export function CostView({ onBack }: CostViewProps) {
   const [showHelp, setShowHelp] = useState(false)
 
   if (isLoading) {
-    return (
-      <div className="flex-1 flex items-center justify-center">
-        <div className="flex flex-col items-center gap-3">
-          <Loader2 className="w-6 h-6 animate-spin text-theme-text-tertiary" />
-          <span className="text-sm text-theme-text-tertiary">Loading cost data...</span>
-        </div>
-      </div>
-    )
+    return <PaneLoader label="Loading cost data…" className="flex-1" />
   }
 
   if (!data || !data.available) {

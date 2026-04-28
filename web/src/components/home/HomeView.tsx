@@ -9,9 +9,9 @@ import { TrafficSummary } from './TrafficSummary'
 import { CertificateHealthCard } from './CertificateHealthCard'
 import { NetworkPolicyCoverageCard } from './NetworkPolicyCoverageCard'
 import { CostCard } from './CostCard'
-import { AuditCard, StatusDot, mapHealthToTone } from '@skyhook-io/k8s-ui'
+import { AuditCard, PaneLoader, StatusDot, mapHealthToTone } from '@skyhook-io/k8s-ui'
 import { ClusterHealthCard } from './ClusterHealthCard'
-import { AlertTriangle, Loader2, Shield } from 'lucide-react'
+import { AlertTriangle, Shield } from 'lucide-react'
 import { clsx } from 'clsx'
 
 interface HomeViewProps {
@@ -29,14 +29,7 @@ export function HomeView({ namespaces, topology, onNavigateToView, onNavigateToR
   const { data: helmData } = useDashboardHelm(namespaces)
 
   if (isLoading) {
-    return (
-      <div className="flex-1 flex items-center justify-center">
-        <div className="flex flex-col items-center gap-3">
-          <Loader2 className="w-6 h-6 animate-spin text-theme-text-tertiary" />
-          <span className="text-sm text-theme-text-tertiary">Loading dashboard...</span>
-        </div>
-      </div>
-    )
+    return <PaneLoader label="Loading dashboard…" className="flex-1" />
   }
 
   if (error || !data) {

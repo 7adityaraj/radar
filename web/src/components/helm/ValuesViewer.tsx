@@ -1,12 +1,13 @@
 import { useState, useCallback } from 'react'
 import { Copy, Check, Settings, Pencil, X, Eye, Play, Loader2 } from 'lucide-react'
+import { PaneLoader } from '@skyhook-io/k8s-ui'
 import { clsx } from 'clsx'
 import yaml from 'yaml'
 import type { HelmValues, ValuesPreviewResponse } from '../../types'
 import { CodeViewer } from '../ui/CodeViewer'
 import { YamlEditor } from '../ui/YamlEditor'
 import { useHelmPreviewValues, useHelmApplyValues } from '../../api/client'
-import { useCanHelmWrite } from '../../contexts/CapabilitiesContext'
+import { useCanHelmAct } from '../../api/client'
 import { ValuesDiffPreview } from './ValuesDiffPreview'
 
 interface ValuesViewerProps {
@@ -41,7 +42,7 @@ export function ValuesViewer({
 
   const previewMutation = useHelmPreviewValues()
   const applyMutation = useHelmApplyValues()
-  const canHelmWrite = useCanHelmWrite()
+  const { allowed: canHelmWrite, reason: helmActReason } = useCanHelmAct()
 
   const canEdit = Boolean(namespace && name) && canHelmWrite
 
@@ -138,11 +139,7 @@ export function ValuesViewer({
   }, [previewData, namespace, name, applyMutation, handleCancelEdit, onApplySuccess])
 
   if (isLoading) {
-    return (
-      <div className="flex items-center justify-center h-32 text-theme-text-tertiary">
-        Loading values...
-      </div>
-    )
+    return <PaneLoader label="Loading values…" className="h-32" />
   }
 
   if (isEmpty && !isEditing) {
@@ -234,7 +231,7 @@ export function ValuesViewer({
                 onClick={handleApply}
                 disabled={!!yamlError || applyMutation.isPending || !canHelmWrite}
                 className="flex items-center gap-1 px-2.5 py-1 text-xs btn-brand rounded disabled:cursor-not-allowed"
-                title={!canHelmWrite ? 'Helm write permissions required (rbac.helm=true)' : undefined}
+                title={!canHelmWrite ? helmActReason : undefined}
               >
                 {applyMutation.isPending ? (
                   <Loader2 className="w-3.5 h-3.5 animate-spin" />
