@@ -298,6 +298,7 @@ export function useAudit(namespaces: string[] = []) {
     queryFn: () => fetchJSON(`/audit${params}`),
     staleTime: 30000,
     refetchInterval: 60000,
+    placeholderData: (prev) => prev,
   })
 }
 
@@ -1967,15 +1968,20 @@ function streamHelmProgress(
 
                 if (data.type === 'complete') {
                   resolve(data)
+                  return
                 } else if (data.type === 'error') {
                   reject(new Error(data.message || failureLabel))
+                  return
                 }
-              } catch {
-                // Ignore parse errors
+              } catch (err) {
+                reject(err instanceof Error ? err : new Error(`${failureLabel}: invalid progress event`))
+                return
               }
             }
           }
         }
+
+        reject(new Error(`${failureLabel}: stream ended before completion`))
       })
       .catch(reject)
   })
@@ -1986,10 +1992,13 @@ export function upgradeWithProgress(
   namespace: string,
   name: string,
   version: string,
+  repositoryName: string | undefined,
   onProgress: (event: InstallProgressEvent) => void
 ): Promise<void> {
+  const params = new URLSearchParams({ version })
+  if (repositoryName) params.set('repository', repositoryName)
   return streamHelmProgress(
-    `${getApiBase()}/helm/releases/${namespace}/${name}/upgrade-stream?version=${encodeURIComponent(version)}`,
+    `${getApiBase()}/helm/releases/${namespace}/${name}/upgrade-stream?${params.toString()}`,
     { method: 'POST' },
     onProgress,
     'Upgrade failed',
@@ -2437,6 +2446,79 @@ export function useSwitchContext() {
       // current context after a failed switch (backend has already switched
       // the in-memory context even though connectivity failed).
       queryClient.invalidateQueries({ queryKey: ['contexts'] })
+    },
+  })
+}
+
+// ============================================================================
+// Active namespace switcher
+// ============================================================================
+
+export interface NamespaceScope {
+  active: string
+  kubeconfigNamespace: string
+  /**
+   * 'cluster-wide' — no per-user pick; user can list across namespaces.
+   * 'namespace'    — per-user view filter pinned to a single namespace.
+   * 'restricted'   — user can't list namespaces and isn't pinned to one.
+   */
+  mode: 'cluster-wide' | 'namespace' | 'restricted'
+  accessibleNamespaces: string[]
+  /** false when accessibleNamespaces is a best-effort short list (no list perm). */
+  authoritative: boolean
+  /** false when clearing would leave no usable namespace fallback. */
+  canClearNamespace: boolean
+}
+
+export function useNamespaceScope() {
+  return useQuery<NamespaceScope>({
+    queryKey: ['namespace-scope'],
+    queryFn: () => fetchJSON('/cluster/namespace-scope'),
+    staleTime: 30000,
+  })
+}
+
+const NAMESPACE_SWITCH_TIMEOUT = 5000
+
+export function useSetActiveNamespace() {
+  const queryClient = useQueryClient()
+  return useMutation<NamespaceScope, Error, { namespace: string }>({
+    mutationFn: async ({ namespace }) => {
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), NAMESPACE_SWITCH_TIMEOUT)
+      try {
+        const response = await apiFetch(`${getApiBase()}/cluster/namespace`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ namespace }),
+          signal: controller.signal,
+        })
+        clearTimeout(timeoutId)
+        if (!response.ok) {
+          const error = await response.json().catch(() => ({ error: 'Unknown error' }))
+          throw new Error(error.error || `HTTP ${response.status}`)
+        }
+        return response.json()
+      } catch (error) {
+        clearTimeout(timeoutId)
+        if (error instanceof Error && error.name === 'AbortError') {
+          throw new Error('Namespace switch timed out. The cluster may be unreachable.')
+        }
+        throw error
+      }
+    },
+    onSuccess: () => {
+      // The user's view filter changed; every cached query result was
+      // shaped by the previous filter, so drop and refetch.
+      queryClient.removeQueries()
+      queryClient.invalidateQueries()
+    },
+    onError: () => {
+      // A failed switch can leave the server's stored pick out of sync
+      // with the cached scope (network timeout after the server wrote;
+      // partial mutation). Refetch so the displayed picker matches what
+      // the server actually persisted instead of what we assumed.
+      queryClient.invalidateQueries({ queryKey: ['namespace-scope'] })
     },
   })
 }

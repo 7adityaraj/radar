@@ -56,16 +56,17 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
   // transient error state under the role-gated panel.
   const { canAtLeast } = useCloudRole()
   const canViewSensitive = canAtLeast('member')
+  const helmNamespace = release.storageNamespace || release.namespace
 
   const { data: releaseDetail, isLoading, refetch: refetchRelease } = useHelmRelease(
-    release.namespace,
+    helmNamespace,
     release.name
   )
   const [refetch, isRefreshAnimating] = useRefreshAnimation(refetchRelease)
 
   // Fetch manifest for selected revision (or latest)
   const { data: manifest, isLoading: manifestLoading } = useHelmManifest(
-    release.namespace,
+    helmNamespace,
     release.name,
     selectedRevision,
     canViewSensitive,
@@ -73,7 +74,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
 
   // Fetch values
   const { data: values, isLoading: valuesLoading } = useHelmValues(
-    release.namespace,
+    helmNamespace,
     release.name,
     showAllValues,
     canViewSensitive,
@@ -81,7 +82,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
 
   // Fetch diff if comparing revisions
   const { data: diffData, isLoading: diffLoading } = useHelmManifestDiff(
-    release.namespace,
+    helmNamespace,
     release.name,
     diffRevisions?.rev1 || 0,
     diffRevisions?.rev2 || 0,
@@ -89,10 +90,11 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
   )
 
   // Lazy check for upgrade availability
-  const { data: upgradeInfo, isLoading: upgradeLoading } = useHelmUpgradeInfo(
-    release.namespace,
+  const { data: upgradeInfo, isLoading: upgradeLoading, error: upgradeError } = useHelmUpgradeInfo(
+    helmNamespace,
     release.name
   )
+  const upgradeErrorMessage = upgradeError instanceof Error ? upgradeError.message : 'Upgrade check failed'
 
   // Mutations for actions
   const uninstallMutation = useHelmUninstall()
@@ -176,7 +178,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
 
     try {
       await rollbackWithProgress(
-        release.namespace,
+        helmNamespace,
         release.name,
         rollbackRevision,
         (event) => {
@@ -195,7 +197,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
       }])
 
       queryClient.invalidateQueries({ queryKey: ['helm-releases'] })
-      queryClient.invalidateQueries({ queryKey: ['helm-release', release.namespace, release.name] })
+      queryClient.invalidateQueries({ queryKey: ['helm-release', helmNamespace, release.name] })
 
       setTimeout(() => {
         setRollbackRevision(null)
@@ -215,7 +217,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
 
   const handleUninstallConfirm = () => {
     uninstallMutation.mutate(
-      { namespace: release.namespace, name: release.name },
+      { namespace: helmNamespace, name: release.name },
       {
         onSuccess: () => {
           setShowUninstallConfirm(false)
@@ -235,9 +237,10 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
 
     try {
       await upgradeWithProgress(
-        release.namespace,
+        helmNamespace,
         release.name,
         upgradeInfo.latestVersion,
+        upgradeInfo.repositoryName,
         (event) => {
           if (event.type === 'progress' && event.message) {
             setUpgradeProgress(prev => [...prev, {
@@ -255,8 +258,8 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
 
       // Invalidate queries
       queryClient.invalidateQueries({ queryKey: ['helm-releases'] })
-      queryClient.invalidateQueries({ queryKey: ['helm-release', release.namespace, release.name] })
-      queryClient.invalidateQueries({ queryKey: ['helm-upgrade-info', release.namespace, release.name] })
+      queryClient.invalidateQueries({ queryKey: ['helm-release', helmNamespace, release.name] })
+      queryClient.invalidateQueries({ queryKey: ['helm-upgrade-info', helmNamespace, release.name] })
       queryClient.invalidateQueries({ queryKey: ['helm-batch-upgrade-info'] })
 
       setTimeout(() => {
@@ -327,6 +330,13 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
               <span className="badge bg-theme-hover/50 text-theme-text-secondary animate-pulse">
                 checking...
               </span>
+            ) : upgradeError ? (
+              <span
+                className="badge bg-theme-hover/50 text-theme-text-secondary"
+                title={upgradeErrorMessage}
+              >
+                upgrade check failed
+              </span>
             ) : upgradeInfo?.updateAvailable ? (
               <button
                 onClick={() => setShowUpgradeConfirm(true)}
@@ -343,6 +353,13 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
             ) : upgradeInfo && !upgradeInfo.error ? (
               <span className={clsx('badge', SEVERITY_BADGE.success)} title="Chart is up to date">
                 latest
+              </span>
+            ) : upgradeInfo?.error ? (
+              <span
+                className="badge bg-theme-hover/50 text-theme-text-secondary"
+                title={upgradeInfo.error}
+              >
+                upstream unknown
               </span>
             ) : null}
           </div>
@@ -450,7 +467,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
                   onToggleAllValues={setShowAllValues}
                   onCopy={(text) => copyToClipboard(text, 'values')}
                   copied={copied === 'values'}
-                  namespace={release.namespace}
+                  namespace={helmNamespace}
                   name={release.name}
                   onApplySuccess={() => refetch()}
                 />

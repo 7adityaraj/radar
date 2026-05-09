@@ -41,6 +41,11 @@ type Settings struct {
 	PinnedKinds []PinnedKind `json:"pinnedKinds,omitempty"`
 	Audit       *AuditConfig `json:"audit,omitempty"`
 	DefaultSort *DefaultSort `json:"defaultSort,omitempty"`
+	// ActiveNamespaces maps kubeconfig context name → user-chosen namespace
+	// override (the in-app namespace switcher's last selection per cluster).
+	// Empty value (or missing key) means no override → fall back to the
+	// kubeconfig context's namespace.
+	ActiveNamespaces map[string]string `json:"activeNamespaces,omitempty"`
 }
 
 // mu serializes Load-mutate-Save cycles to prevent concurrent PUTs from

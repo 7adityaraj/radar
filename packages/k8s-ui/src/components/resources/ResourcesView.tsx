@@ -156,7 +156,7 @@ const WORKLOAD_KINDS = new Set(['deployments', 'statefulsets', 'daemonsets'])
 
 // Columns to skip for auto-detected filters (high cardinality, text-like, or non-filterable)
 const SKIP_FILTER_COLUMNS = new Set([
-  'name', 'namespace', 'age', 'keys', 'size', 'images', 'domains', 'hosts', 'rules',
+  'name', 'age', 'keys', 'size', 'images', 'domains', 'hosts', 'rules',
   'ports', 'message', 'url', 'ref', 'revision', 'path', 'selector', 'ready', 'restarts',
   'completions', 'duration', 'schedule', 'lastRun', 'target', 'replicas', 'metrics',
   'capacity', 'accessModes', 'volume', 'step', 'progress', 'template', 'expires',
@@ -3497,7 +3497,7 @@ export function ResourcesView({
           {lastUpdated && (
             <div className="flex items-center gap-1.5 text-xs text-theme-text-tertiary">
               <Clock className="w-3.5 h-3.5" />
-              <span>Updated {formatAge(lastUpdated.toISOString())}</span>
+              <span>Updated <span className="inline-block min-w-[4ch] tabular-nums">{formatAge(lastUpdated.toISOString())}</span></span>
             </div>
           )}
           {/* Column picker */}
@@ -3604,6 +3604,23 @@ export function ResourcesView({
                   <X className="w-3.5 h-3.5" />
                 </button>
               )}
+              {/*
+                The sidebar's count badge shows the cluster-wide
+                total for the selected kind (from resourceCounts) and
+                deliberately stays unfiltered. When a search yields
+                zero results the user can think the badge is lying.
+                Spell out that the badge is the cluster total, not
+                the filtered count.
+              */}
+              {searchTerm && (() => {
+                const totalForKind = counts[selectedKind.group ? `${selectedKind.group}/${selectedKind.kind}` : selectedKind.kind] ?? 0
+                if (totalForKind === 0) return null
+                return (
+                  <p className="text-xs mt-1 text-theme-text-disabled">
+                    The sidebar shows {pluralize(totalForKind, selectedKind.kind)} in the cluster — the count is unfiltered.
+                  </p>
+                )
+              })()}
               {namespaces.length > 0 && <p className="text-sm mt-1 text-theme-text-disabled">Searching in {namespaces.length === 1 ? `namespace: ${namespaces[0]}` : `${namespaces.length} namespaces`}</p>}
               {/* Show active filters as dismissible badges so user can clear them */}
               {(() => {

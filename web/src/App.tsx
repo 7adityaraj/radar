@@ -21,6 +21,7 @@ import { PortForwardProvider, PortForwardIndicator, PortForwardPanel } from './c
 import { DockProvider, BottomDock, useDock, useOpenLocalTerminal } from './components/dock'
 import { DURATION_DOCK } from '@skyhook-io/k8s-ui/utils/animation'
 import { ContextSwitcher } from './components/ContextSwitcher'
+import { NamespaceSwitcher, type NamespaceSwitcherHandle } from './components/NamespaceSwitcher'
 import { useNavCustomization } from './context/NavCustomization'
 import { ContextSwitchProvider, useContextSwitch } from './context/ContextSwitchContext'
 import { ConnectionProvider, useConnection } from './context/ConnectionContext'
@@ -28,13 +29,13 @@ import { ConnectionErrorView } from './components/ConnectionErrorView'
 import { CapabilitiesProvider, useCapabilitiesContext } from './contexts/CapabilitiesContext'
 import { UserMenu } from './components/UserMenu'
 import { ErrorBoundary } from './components/ui/ErrorBoundary'
-import { NamespaceSelector } from './components/ui/NamespaceSelector'
+import { NamespaceSelector, type NamespaceSelectorHandle } from './components/ui/NamespaceSelector'
 import { UpdateNotification } from './components/ui/UpdateNotification'
 import { ShortcutHelpOverlay } from './components/ui/ShortcutHelpOverlay'
 import { CommandPalette } from './components/ui/CommandPalette'
 import { DiagnosticsOverlay } from './components/ui/DiagnosticsOverlay'
 import { useEventSource } from './hooks/useEventSource'
-import { useNamespaces, useSwitchContext, useAuthMe } from './api/client'
+import { useNamespaces, useNamespaceScope, useSwitchContext, useAuthMe } from './api/client'
 import { routePath, apiUrl, getAuthHeaders, getCredentialsMode } from './api/config'
 import { KeyboardShortcutProvider, useRegisterShortcut, useRegisterShortcuts } from './hooks/useKeyboardShortcuts'
 import { useAnimatedUnmount } from './hooks/useAnimatedUnmount'
@@ -46,6 +47,7 @@ import { LargeClusterNamespacePicker } from './components/shared/LargeClusterNam
 import { SettingsDialog } from './components/settings/SettingsDialog'
 import type { TopologyNode, GroupingMode, MainView, SelectedResource, SelectedHelmRelease, NodeKind, TopologyMode, Topology, K8sEvent } from './types'
 import { kindToPlural, openExternal } from './utils/navigation'
+import type { ContextSwitcherHandle } from './components/ContextSwitcher'
 
 // All possible node kinds (core + GitOps)
 const ALL_NODE_KINDS: NodeKind[] = [
@@ -310,34 +312,51 @@ function AppInner() {
   // Suppress the mainView-change clear effect during controlled expand/collapse transitions.
   const suppressViewClearRef = useRef(false)
 
-  // Close resource drawer when switching workload kind in URL (/resources/pods → /resources/deployments).
-  // Keeps stale Pod drawer from masking the table after sidebar navigation (Radar Hub / app.radarhq.io).
-  const prevResourcesKindSlugRef = useRef<string | null>(null)
+  // Close resource drawer when the /resources route no longer matches the
+  // selected drawer resource. This covers both in-view kind switches and
+  // cross-kind navigations from expanded drawers (for example Node -> View Pods).
+  const prevResourcesKindKeyRef = useRef<string | null>(null)
+  const currentResourceKindSlug = normalizedResourcesKindSlug.toLowerCase()
+  const currentResourceGroup = searchParams.get('apiGroup') ?? ''
+  const selectedResourceKindSlug = selectedResource ? kindToPlural(selectedResource.kind).toLowerCase() : ''
+  const selectedResourceGroup = selectedResource?.group ?? ''
+  const selectedResourceRouteMismatch = mainView === 'resources' && !!selectedResource && (
+    selectedResourceKindSlug !== currentResourceKindSlug ||
+    selectedResourceGroup !== currentResourceGroup
+  )
+  const resourcesKindRouteChanged = mainView === 'resources' &&
+    prevResourcesKindKeyRef.current !== null &&
+    prevResourcesKindKeyRef.current !== `${currentResourceGroup}/${currentResourceKindSlug}`
+  const routeSelectedResource = resourcesKindRouteChanged && selectedResourceRouteMismatch
+    ? null
+    : selectedResource
+
   useEffect(() => {
     if (mainView !== 'resources') {
-      prevResourcesKindSlugRef.current = null
+      prevResourcesKindKeyRef.current = null
       return
     }
-    const slug = normalizedResourcesKindSlug
-    const prev = prevResourcesKindSlugRef.current
-    prevResourcesKindSlugRef.current = slug
-    if (prev !== null && prev !== slug) {
+    const key = `${currentResourceGroup}/${currentResourceKindSlug}`
+    const prev = prevResourcesKindKeyRef.current
+    prevResourcesKindKeyRef.current = key
+
+    if (prev !== null && prev !== key && selectedResourceRouteMismatch) {
       setSelectedResource(null)
       setDrawerExpanded(false)
     }
-  }, [mainView, normalizedResourcesKindSlug])
+  }, [mainView, currentResourceKindSlug, currentResourceGroup, selectedResourceRouteMismatch])
 
   // Animation hooks for smooth mount/unmount transitions
-  const resourceDrawer = useAnimatedUnmount(!!selectedResource, 300)
+  const resourceDrawer = useAnimatedUnmount(!!routeSelectedResource, 300)
   const helmDrawer = useAnimatedUnmount(!!(mainView === 'helm' && selectedHelmRelease), 300)
   const helpOverlay = useAnimatedUnmount(showHelp, 300)
   const commandPaletteAnim = useAnimatedUnmount(showCommandPalette, 300)
   const diagnosticsOverlay = useAnimatedUnmount(showDiagnostics, 300)
 
   // Hold last valid values so drawers can animate out before data disappears
-  const lastResourceRef = useRef(selectedResource)
-  if (selectedResource) lastResourceRef.current = selectedResource
-  const drawerResource = selectedResource || lastResourceRef.current
+  const lastResourceRef = useRef(routeSelectedResource)
+  if (routeSelectedResource) lastResourceRef.current = routeSelectedResource
+  const drawerResource = routeSelectedResource || lastResourceRef.current
 
   const lastHelmReleaseRef = useRef(selectedHelmRelease)
   if (selectedHelmRelease) lastHelmReleaseRef.current = selectedHelmRelease
@@ -371,6 +390,11 @@ function AppInner() {
   // Context switching for command palette
   const switchContext = useSwitchContext()
 
+  // Refs for dropdown components to trigger them via shortcuts
+  const namespaceSelectorRef = useRef<NamespaceSelectorHandle>(null)
+  const namespaceSwitcherRef = useRef<NamespaceSwitcherHandle>(null)
+  const contextSwitcherRef = useRef<ContextSwitcherHandle>(null)
+
   // View switching keyboard shortcuts
   const views: ExtendedMainView[] = ['home', 'topology', 'resources', 'timeline', 'helm', 'traffic', 'cost', 'audit']
   useRegisterShortcuts([
@@ -382,6 +406,22 @@ function AppInner() {
       scope: 'global' as const,
       handler: () => setMainView(view),
     })),
+    {
+      id: 'switch-namespace',
+      keys: 'n',
+      description: 'Switch namespace',
+      category: 'Navigation' as const,
+      scope: 'global' as const,
+      handler: () => (namespaceSwitcherRef.current ?? namespaceSelectorRef.current)?.open(),
+    },
+    {
+      id: 'switch-context',
+      keys: 'c',
+      description: 'Switch context',
+      category: 'Navigation' as const,
+      scope: 'global' as const,
+      handler: () => contextSwitcherRef.current?.open(),
+    },
     {
       id: 'theme-toggle',
       keys: 't',
@@ -453,6 +493,11 @@ function AppInner() {
 
   // Fetch available namespaces
   const { data: availableNamespaces, error: namespacesError } = useNamespaces()
+
+  // Per-user view filter served by the backend. Loaded eagerly so the
+  // picker can render its current state without showing the multi-select
+  // fallback during the initial scope fetch.
+  const { data: namespaceScope } = useNamespaceScope()
 
   // Context switch state
   const { isSwitching, targetContext, progressMessage, updateProgress, endSwitch } = useContextSwitch()
@@ -676,7 +721,7 @@ function AppInner() {
       if (slashIdx > 0) {
         const ns = releaseParam.slice(0, slashIdx)
         const name = releaseParam.slice(slashIdx + 1)
-        setSelectedHelmRelease({ namespace: ns, name })
+        setSelectedHelmRelease({ namespace: ns, name, storageNamespace: searchParams.get('releaseStorage') || undefined })
       }
     }
   }, [searchParams])
@@ -798,7 +843,7 @@ function AppInner() {
           {navCustomization.brandSlot ?? <Logo />}
 
           <div className="flex items-center gap-2">
-            {navCustomization.contextSlot ?? <ContextSwitcher />}
+            {navCustomization.contextSlot ?? <ContextSwitcher ref={contextSwitcherRef} />}
             {/* Connection status - next to cluster name */}
             <div className="flex items-center gap-1.5 ml-1">
               <Tooltip
@@ -891,15 +936,26 @@ function AppInner() {
 
         {/* Right: Controls */}
         <div className="flex items-center gap-3 shrink-0">
-          {/* Namespace selector with search */}
-          <NamespaceSelector
-            value={namespaces}
-            onChange={setNamespaces}
-            namespaces={availableNamespaces}
-            namespacesError={namespacesError}
-            disabled={mainView === 'helm'}
-            disabledTooltip="Helm view always shows all namespaces"
-          />
+          {/* Namespace control. The 'n' shortcut targets a single ref —
+              both branches expose the same `open()` handle so the shortcut
+              works regardless of which control is rendered. */}
+          {namespaceScope ? (
+            <NamespaceSwitcher
+              ref={namespaceSwitcherRef}
+              disabled={mainView === 'helm'}
+              disabledTooltip="Helm view always shows all namespaces"
+            />
+          ) : (
+            <NamespaceSelector
+              ref={namespaceSelectorRef}
+              value={namespaces}
+              onChange={setNamespaces}
+              namespaces={availableNamespaces}
+              namespacesError={namespacesError}
+              disabled={mainView === 'helm'}
+              disabledTooltip="Helm view always shows all namespaces"
+            />
+          )}
 
           {/* Command palette trigger */}
           <button
@@ -1192,7 +1248,7 @@ function AppInner() {
         {mainView === 'resources' && (
           <ResourcesView
             namespaces={namespaces}
-            selectedResource={selectedResource}
+            selectedResource={routeSelectedResource}
             onResourceClick={(res) => res ? navigateToResource(res) : setSelectedResource(null)}
             onResourceClickYaml={(res) => navigateToResource(res, 'yaml')}
             onKindChange={() => setSelectedResource(null)}
@@ -1220,10 +1276,15 @@ function AppInner() {
           <HelmView
             namespace=""
             selectedRelease={selectedHelmRelease}
-            onReleaseClick={(ns, name) => {
-              setSelectedHelmRelease({ namespace: ns, name })
+            onReleaseClick={(ns, name, storageNamespace) => {
+              setSelectedHelmRelease({ namespace: ns, name, storageNamespace })
               const params = new URLSearchParams(window.location.search)
               params.set('release', `${ns}/${name}`)
+              if (storageNamespace) {
+                params.set('releaseStorage', storageNamespace)
+              } else {
+                params.delete('releaseStorage')
+              }
               setSearchParams(params, { replace: true })
             }}
           />
@@ -1305,6 +1366,7 @@ function AppInner() {
             setSelectedHelmRelease(null)
             const params = new URLSearchParams(window.location.search)
             params.delete('release')
+            params.delete('releaseStorage')
             setSearchParams(params, { replace: true })
           }}
           onNavigateToResource={(resource) => {

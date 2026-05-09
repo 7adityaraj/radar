@@ -1,6 +1,7 @@
 package k8s
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -10,7 +11,10 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
@@ -23,15 +27,15 @@ import (
 )
 
 var (
-	k8sClient          *kubernetes.Clientset
-	k8sConfig          *rest.Config
-	discoveryClient    *discovery.DiscoveryClient
-	dynamicClient      dynamic.Interface
-	initOnce           sync.Once
-	initErr            error
-	kubeconfigPath     string
-	kubeconfigPaths    []string // Multiple kubeconfig paths when using --kubeconfig-dir or KUBECONFIG env
-	kubeconfigMode     string   // One of: "in-cluster", "single", "multi-env", "multi-dir"
+	k8sClient         *kubernetes.Clientset
+	k8sConfig         *rest.Config
+	discoveryClient   *discovery.DiscoveryClient
+	dynamicClient     dynamic.Interface
+	initOnce          sync.Once
+	initErr           error
+	kubeconfigPath    string
+	kubeconfigPaths   []string // Multiple kubeconfig paths when using --kubeconfig-dir or KUBECONFIG env
+	kubeconfigMode    string   // One of: "in-cluster", "single", "multi-env", "multi-dir"
 	totalContextCount int      // Total number of contexts exposed across all kubeconfig files
 	// contextRegistry maps each user-facing context name to its source file and
 	// the name it has inside that file. Populated when Radar loads more than one
@@ -43,7 +47,14 @@ var (
 	contextRegistry map[string]contextEntry
 	// perFileConfigs caches each file's parsed api.Config so GetAvailableContexts
 	// doesn't re-read N files on every call. Keyed by absolute file path.
-	perFileConfigs    map[string]*clientcmdapi.Config
+	perFileConfigs map[string]*clientcmdapi.Config
+	// perFileMtimes lets refreshContextRegistry detect rewritten or
+	// removed kubeconfig files between calls. Without this the
+	// registry is built once at startup and never refreshes, so
+	// destroyed clusters / removed contexts linger in the dropdown
+	// (they only error out when the user tries to switch to them).
+	// Same lifecycle / lock as perFileConfigs.
+	perFileMtimes           map[string]time.Time
 	contextName       string
 	clusterName       string
 	contextNamespace  string // Default namespace from kubeconfig context
@@ -650,7 +661,7 @@ func SetFallbackNamespace(ns string) {
 }
 
 // GetEffectiveNamespace returns the namespace to use for RBAC fallback checks.
-// Prefers the kubeconfig context namespace, falls back to the explicit --namespace flag.
+// Precedence: kubeconfig context namespace > --namespace flag.
 func GetEffectiveNamespace() string {
 	clientMu.RLock()
 	defer clientMu.RUnlock()
@@ -658,6 +669,64 @@ func GetEffectiveNamespace() string {
 		return contextNamespace
 	}
 	return fallbackNamespace
+}
+
+// HasNamespaceFallback reports whether the current kubeconfig/context provides
+// a namespace fallback (kubeconfig context namespace or --namespace flag).
+func HasNamespaceFallback() bool {
+	clientMu.RLock()
+	defer clientMu.RUnlock()
+	return contextNamespace != "" || fallbackNamespace != ""
+}
+
+// GetAccessibleNamespaces returns the list of namespaces the user has
+// access to plus a flag indicating whether the list is authoritative.
+//
+//   - If the cluster-wide `list namespaces` succeeds (cluster-wide read),
+//     returns every namespace and authoritative=true.
+//   - On 403/401 the user is namespace-restricted; returns a best-effort
+//     short list (kubeconfig context namespace + --namespace flag, deduped)
+//     and authoritative=false.
+//   - On any other (transient) error, returns the same best-effort list
+//     with authoritative=false AND logs the error so a flapping apiserver
+//     surfaces in diagnostics rather than silently degrading the UI.
+func GetAccessibleNamespaces(ctx context.Context) ([]string, bool) {
+	client := GetClient()
+	if client == nil {
+		return nil, false
+	}
+
+	listCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	list, err := client.CoreV1().Namespaces().List(listCtx, metav1.ListOptions{})
+	if err == nil {
+		names := make([]string, 0, len(list.Items))
+		for _, ns := range list.Items {
+			names = append(names, ns.Name)
+		}
+		sort.Strings(names)
+		return names, true
+	}
+
+	if !apierrors.IsForbidden(err) && !apierrors.IsUnauthorized(err) {
+		log.Printf("[k8s] GetAccessibleNamespaces: non-auth error listing namespaces: %v (falling back to best-effort short list)", err)
+	}
+
+	// Cluster-wide list denied (or transient). Best-effort fallback so
+	// the picker isn't empty for a namespace-scoped user.
+	seen := map[string]bool{}
+	var fallback []string
+	clientMu.RLock()
+	for _, ns := range []string{contextNamespace, fallbackNamespace} {
+		if ns != "" && !seen[ns] {
+			seen[ns] = true
+			fallback = append(fallback, ns)
+		}
+	}
+	clientMu.RUnlock()
+	sort.Strings(fallback)
+	return fallback, false
 }
 
 // ForceInCluster overrides in-cluster detection for testing
@@ -675,6 +744,11 @@ type ContextInfo struct {
 	User      string `json:"user"`
 	Namespace string `json:"namespace"`
 	IsCurrent bool   `json:"isCurrent"`
+	// Source labels the kubeconfig file this context came from
+	// (e.g. "kube-cluster-paris" or "prod"). Set only in multi-file
+	// mode; populated for every context — not just colliding ones — so
+	// the dropdown can show provenance even without ambiguity.
+	Source string `json:"source,omitempty"`
 }
 
 // GetAvailableContexts returns all available contexts from the kubeconfig
@@ -692,16 +766,48 @@ func GetAvailableContexts() ([]ContextInfo, error) {
 		}, nil
 	}
 
-	clientMu.RLock()
+	// Reconcile registry against disk before reading. This is the
+	// only refresh point in multi-file (isolated-load) mode — without
+	// it, kubeconfigs that were rewritten or deleted on disk after
+	// startup keep showing up in the dropdown until the user
+	// restarts Radar (the "junk clusters" complaint).
+	//
+	// refreshContextRegistry returns NEW maps when anything changes,
+	// so we publish them atomically under the write lock. Snapshot
+	// readers (SwitchContext, WriteKubeconfigForCurrentContext) take
+	// bare references under RLock and use them after the unlock — that
+	// pattern is only safe as long as the maps they captured are never
+	// mutated. Returning fresh maps preserves that invariant.
+	clientMu.Lock()
+	if contextRegistry != nil {
+		// Lazy init: a future code path that promotes single-file mode
+		// to isolated-load without touching perFileMtimes would leave
+		// it nil. Seeding it here is safe because we always hold the
+		// write lock and refresh's nil guard catches it too.
+		if perFileMtimes == nil {
+			perFileMtimes = make(map[string]time.Time, len(perFileConfigs))
+		}
+		newRegistry, newFileConfigs, newFileMtimes, changed := refreshContextRegistry(
+			contextRegistry, perFileConfigs, perFileMtimes,
+		)
+		if changed {
+			contextRegistry = newRegistry
+			perFileConfigs = newFileConfigs
+			perFileMtimes = newFileMtimes
+		}
+	}
 	registry := contextRegistry
 	fileConfigs := perFileConfigs
 	currentCtx := contextName
-	clientMu.RUnlock()
+	clientMu.Unlock()
 
 	if registry != nil {
 		// Isolated-load mode: enumerate every registered context, pulling
 		// cluster/user/namespace from the file it originally lives in.
 		// No merge happens — shared names across files stay distinct.
+		// Iterating outside the lock is safe because refresh publishes
+		// fresh maps on change rather than mutating in place, so the
+		// snapshot we captured is frozen.
 		contexts := make([]ContextInfo, 0, len(registry))
 		for qName, entry := range registry {
 			cfg, ok := fileConfigs[entry.SourceFile]
@@ -718,6 +824,7 @@ func GetAvailableContexts() ([]ContextInfo, error) {
 				User:      ctx.AuthInfo,
 				Namespace: ctx.Namespace,
 				IsCurrent: qName == currentCtx,
+				Source:    kubeconfigSourceLabel(entry.SourceFile),
 			})
 		}
 		return contexts, nil
@@ -913,9 +1020,17 @@ func MergeAndSwitchContext(kubeconfigData []byte, contextName string) (string, s
 	if existingPath, ok := capiKubeconfigs[contextName]; ok {
 		if err := clientcmd.WriteToFile(*newConfig, existingPath); err == nil {
 			// Refresh the cached parsed config so subsequent GetAvailableContexts
-			// calls reflect any changes in the incoming YAML.
+			// calls reflect any changes in the incoming YAML. Also bump the
+			// cached mtime so the next refresh doesn't see a stale value
+			// (the WriteToFile above just changed the file's mtime) and
+			// uselessly re-parse a file we've already re-parsed here.
 			if parsed, perr := clientcmd.LoadFromFile(existingPath); perr == nil {
 				perFileConfigs[existingPath] = parsed
+				if perFileMtimes != nil {
+					if info, serr := os.Stat(existingPath); serr == nil {
+						perFileMtimes[existingPath] = info.ModTime()
+					}
+				}
 			}
 			qName := findQualifiedNameForPath(contextRegistry, existingPath, contextName)
 			if qName == "" {
@@ -948,6 +1063,7 @@ func MergeAndSwitchContext(kubeconfigData []byte, contextName string) (string, s
 	// remove the temp file and leave the globals untouched — no half-state.
 	var newRegistry map[string]contextEntry
 	var newFileConfigs map[string]*clientcmdapi.Config
+	var newFileMtimes map[string]time.Time
 	var newPaths []string
 
 	if contextRegistry == nil {
@@ -964,6 +1080,18 @@ func MergeAndSwitchContext(kubeconfigData []byte, contextName string) (string, s
 		}
 		newRegistry = registry
 		newFileConfigs = fileConfigs
+		// Seed the mtime cache for the same set of files. Without
+		// this, the next refresh would write to a nil map
+		// (perFileMtimes is package-level and stays nil through the
+		// promotion). Refresh's nil-map guard would also catch this,
+		// but seeding here keeps the invariant "perFileMtimes is
+		// non-nil whenever contextRegistry is non-nil".
+		newFileMtimes = make(map[string]time.Time, len(seedPaths))
+		for _, p := range seedPaths {
+			if info, err := os.Stat(p); err == nil {
+				newFileMtimes[p] = info.ModTime()
+			}
+		}
 		newPaths = seedPaths
 	} else {
 		cfg, err := clientcmd.LoadFromFile(tmpPath)
@@ -982,6 +1110,13 @@ func MergeAndSwitchContext(kubeconfigData []byte, contextName string) (string, s
 			newFileConfigs[k] = v
 		}
 		newFileConfigs[tmpPath] = cfg
+		newFileMtimes = make(map[string]time.Time, len(perFileMtimes)+1)
+		for k, v := range perFileMtimes {
+			newFileMtimes[k] = v
+		}
+		if info, err := os.Stat(tmpPath); err == nil {
+			newFileMtimes[tmpPath] = info.ModTime()
+		}
 		newPaths = append(append([]string(nil), kubeconfigPaths...), tmpPath)
 		for name := range cfg.Contexts {
 			qName := qualifyContextName(newRegistry, name, tmpPath)
@@ -1001,6 +1136,7 @@ func MergeAndSwitchContext(kubeconfigData []byte, contextName string) (string, s
 	// Commit. All globals updated atomically under the single Lock held above.
 	contextRegistry = newRegistry
 	perFileConfigs = newFileConfigs
+	perFileMtimes = newFileMtimes
 	kubeconfigPaths = newPaths
 	capiKubeconfigs[contextName] = tmpPath
 
